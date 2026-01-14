@@ -113,11 +113,11 @@ async def criar_comparacao(
         otimiza_data = []
         for otimiza_file in otimiza_files:
             otimiza_bytes = await otimiza_file.read()
-            if len(otimiza_bytes) == 0:
-                raise HTTPException(
-                    status_code=400,
+        if len(otimiza_bytes) == 0:
+            raise HTTPException(
+                status_code=400,
                     detail=f"Arquivo TXT Otimiza vazio: {otimiza_file.filename or 'sem nome'}"
-                )
+            )
             otimiza_nome = otimiza_file.filename or "otimiza.txt"
             otimiza_data.append((otimiza_bytes, otimiza_nome))
         

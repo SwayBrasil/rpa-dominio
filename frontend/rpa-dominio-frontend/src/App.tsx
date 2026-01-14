@@ -269,9 +269,9 @@ function App() {
                   {otimizaTxtFiles.map((file, idx) => (
                     <span key={idx} className="file-name">
                       {file.name}
-                    </span>
+                </span>
                   ))}
-                </div>
+            </div>
               )}
             </div>
 
@@ -430,35 +430,35 @@ function App() {
                   {comparacaoSelecionada.qtd_divergencias ??
                     "–"}
                 </p>
-                <div className="validation-summary">
-                  <p>
+                  <div className="validation-summary">
+                    <p>
                     <strong>Validação de Contas:</strong>{" "}
                     {comparacaoSelecionada.account_validation_summary ? (
                       <>
                         <span className="status-badge status-ativa">Ativa</span>
-                        <ul>
-                          <li>
-                            ✅ OK:{" "}
-                            {
-                              comparacaoSelecionada.account_validation_summary
-                                .ok
-                            }
-                          </li>
-                          <li>
-                            ❌ Inválidas:{" "}
-                            {
-                              comparacaoSelecionada.account_validation_summary
-                                .invalid
-                            }
-                          </li>
-                          <li>
-                            ⚠️ Sem regra:{" "}
-                            {
-                              comparacaoSelecionada.account_validation_summary
-                                .unknown
-                            }
-                          </li>
-                        </ul>
+                    <ul>
+                      <li>
+                        ✅ OK:{" "}
+                        {
+                          comparacaoSelecionada.account_validation_summary
+                            .ok
+                        }
+                      </li>
+                      <li>
+                        ❌ Inválidas:{" "}
+                        {
+                          comparacaoSelecionada.account_validation_summary
+                            .invalid
+                        }
+                      </li>
+                      <li>
+                        ⚠️ Sem regra:{" "}
+                        {
+                          comparacaoSelecionada.account_validation_summary
+                            .unknown
+                        }
+                      </li>
+                    </ul>
                       </>
                     ) : (
                       <span className="status-badge status-nao-configurada">
@@ -466,7 +466,7 @@ function App() {
                       </span>
                     )}
                   </p>
-                </div>
+                  </div>
               </div>
 
               {tiposDivergencia.length > 0 && (

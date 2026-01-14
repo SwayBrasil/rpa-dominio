@@ -378,13 +378,13 @@ def _parse_nubank(pdf_path: Path) -> Tuple[List[Lancamento], List[str]]:
                                                 lancamento = Lancamento(
                                                     data=data_mov,
                                                     descricao=_normalizar_descricao(desc_clean),
-                                                    documento=None,
-                                                    valor=valor,
-                                                    saldo=None,
-                                                    conta_contabil=None,
-                                                    origem="mpds"
-                                                )
-                                                lancamentos.append(lancamento)
+                            documento=None,
+                            valor=valor,
+                            saldo=None,
+                            conta_contabil=None,
+                            origem="mpds"
+                        )
+                        lancamentos.append(lancamento)
     
     except Exception as e:
         logger.error(f"Erro ao processar PDF Nubank: {e}")
@@ -807,8 +807,8 @@ def _parse_sicoob(pdf_path: Path) -> Tuple[List[Lancamento], List[str]]:
                 linha_upper = linha.upper()
                 if any(w in linha_upper for w in STOPWORDS):
                     i += 1
-                    continue
-                
+                        continue
+                    
                 # 1) Detecta início de lançamento (DD/MM)
                 if is_candidate_start(linha):
                     # Finaliza lançamento anterior se existir
