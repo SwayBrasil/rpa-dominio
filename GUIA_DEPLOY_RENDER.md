@@ -22,14 +22,33 @@ Este guia explica como publicar o projeto Comparador de Extratos no Render.
 
 O `render.yaml` criará automaticamente:
 - ✅ **Backend** (Web Service Python)
-- ✅ **Frontend** (Static Site)
 - ✅ **PostgreSQL Database**
 
-### Passo 3: Variáveis de Ambiente
+**Nota:** O Frontend precisa ser criado manualmente (veja passo 3).
+
+### Passo 3: Criar Frontend Manualmente
+
+Após o Blueprint ser criado, você precisa criar o Frontend separadamente:
+
+1. No Render Dashboard, clique em **"New +"** → **"Static Site"**
+2. Conecte o repositório: `SwayBrasil/rpa-dominio`
+3. Configure:
+   - **Name:** `rpa-dominio-frontend`
+   - **Branch:** `main`
+   - **Root Directory:** `frontend/rpa-dominio-frontend`
+   - **Build Command:** `npm install && npm run build`
+   - **Publish Directory:** `dist`
+   - **Environment Variables:**
+     ```
+     VITE_API_BASE_URL=https://rpa-dominio-backend.onrender.com
+     ```
+     ⚠️ Substitua `rpa-dominio-backend` pelo nome real do seu backend.
+4. Clique em **"Create Static Site"**
+
+### Passo 4: Variáveis de Ambiente
 
 O Render configurará automaticamente:
-- `DATABASE_URL` - Conectado ao PostgreSQL
-- `VITE_API_BASE_URL` - URL do backend para o frontend
+- `DATABASE_URL` - Conectado ao PostgreSQL (no backend)
 
 ## 🎯 Opção 2: Deploy Manual (Passo a Passo)
 

@@ -22,19 +22,6 @@ services:
         value: ./data
     healthCheckPath: /health
 
-  # Frontend React
-  - type: static
-    name: rpa-dominio-frontend
-    region: oregon
-    buildCommand: cd frontend/rpa-dominio-frontend && npm install && npm run build
-    staticPublishPath: frontend/rpa-dominio-frontend/dist
-    envVars:
-      - key: VITE_API_BASE_URL
-        fromService:
-          name: rpa-dominio-backend
-          type: web
-          property: host
-
 databases:
   # PostgreSQL Database
   - name: rpa-dominio-db
