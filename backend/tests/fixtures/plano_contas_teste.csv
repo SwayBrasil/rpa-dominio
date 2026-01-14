@@ -1,0 +1,12 @@
+codigo,descricao,nivel,pai,tipo,nature
+1.1,Ativo Circulante,1,,ASSET,DEBIT
+1.1.1,Caixa,2,1.1,ASSET,DEBIT
+1.1.2,Bancos,2,1.1,ASSET,DEBIT
+1.2,Contas a Receber,1,,ASSET,DEBIT
+1.2.1,Clientes,2,1.2,ASSET,DEBIT
+2.1,Passivo Circulante,1,,LIABILITY,CREDIT
+2.1.1,Fornecedores,2,2.1,LIABILITY,CREDIT
+2.1.2,Impostos a Pagar,2,2.1,LIABILITY,CREDIT
+2.112,Impostos e Taxas,2,2.1,LIABILITY,CREDIT
+
+

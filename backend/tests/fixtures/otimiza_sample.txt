@@ -1,0 +1,7 @@
+01/01/2025 | Pagamento fornecedor ABC | 12345 | 1500.00
+02/01/2025 | Recebimento cliente XYZ | 67890 | -2500.00
+03/01/2025 | Tarifa bancária |  | 5.50
+04/01/2025 | Depósito em conta | 11111 | -1000.00
+05/01/2025 | Transferência | 22222 | 500.00
+
+
