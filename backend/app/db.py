@@ -134,45 +134,44 @@ def _migrate_add_new_columns():
                     if is_sqlite:
                         # SQLite não permite MODIFY, então recriamos a tabela
                         conn.execute(text("PRAGMA foreign_keys=OFF"))
-                    
-                    # Cria tabela temporária com schema atualizado
-                    conn.execute(text("""
-                        CREATE TABLE comparacoes_new (
-                            id INTEGER NOT NULL PRIMARY KEY,
-                            criado_em DATETIME NOT NULL,
-                            periodo_inicio DATE NOT NULL,
-                            periodo_fim DATE NOT NULL,
-                            source_type VARCHAR(50) DEFAULT 'OTIMIZA_TXT',
-                            bank_source_type VARCHAR(50) DEFAULT 'CSV',
-                            input_files TEXT,
-                            status VARCHAR(50) DEFAULT 'pendente',
-                            erro TEXT,
-                            qtd_lancamentos_extrato INTEGER,
-                            qtd_lancamentos_razao INTEGER,
-                            qtd_divergencias INTEGER,
-                            parsing_issues TEXT
-                        )
-                    """))
-                    
-                    # Copia dados (ignora colunas antigas que não existem mais)
-                    conn.execute(text("""
-                        INSERT INTO comparacoes_new 
-                        (id, criado_em, periodo_inicio, periodo_fim, source_type, bank_source_type, 
-                         input_files, status, erro, qtd_lancamentos_extrato, qtd_lancamentos_razao, 
-                         qtd_divergencias, parsing_issues)
-                        SELECT 
-                            id, criado_em, periodo_inicio, periodo_fim,
-                            COALESCE(source_type, 'OTIMIZA_TXT') as source_type,
-                            COALESCE(bank_source_type, 'CSV') as bank_source_type,
-                            input_files, status, erro, qtd_lancamentos_extrato, 
-                            qtd_lancamentos_razao, qtd_divergencias, parsing_issues
-                        FROM comparacoes
-                    """))
-                    
-                    # Remove tabela antiga e renomeia nova
-                    conn.execute(text("DROP TABLE comparacoes"))
-                    conn.execute(text("ALTER TABLE comparacoes_new RENAME TO comparacoes"))
-                    
+                        
+                        # Cria tabela temporária com schema atualizado
+                        conn.execute(text("""
+                            CREATE TABLE comparacoes_new (
+                                id INTEGER NOT NULL PRIMARY KEY,
+                                criado_em DATETIME NOT NULL,
+                                periodo_inicio DATE NOT NULL,
+                                periodo_fim DATE NOT NULL,
+                                source_type VARCHAR(50) DEFAULT 'OTIMIZA_TXT',
+                                bank_source_type VARCHAR(50) DEFAULT 'CSV',
+                                input_files TEXT,
+                                status VARCHAR(50) DEFAULT 'pendente',
+                                erro TEXT,
+                                qtd_lancamentos_extrato INTEGER,
+                                qtd_lancamentos_razao INTEGER,
+                                qtd_divergencias INTEGER,
+                                parsing_issues TEXT
+                            )
+                        """))
+                        
+                        # Copia dados (ignora colunas antigas que não existem mais)
+                        conn.execute(text("""
+                            INSERT INTO comparacoes_new 
+                            (id, criado_em, periodo_inicio, periodo_fim, source_type, bank_source_type, 
+                             input_files, status, erro, qtd_lancamentos_extrato, qtd_lancamentos_razao, 
+                             qtd_divergencias, parsing_issues)
+                            SELECT 
+                                id, criado_em, periodo_inicio, periodo_fim,
+                                COALESCE(source_type, 'OTIMIZA_TXT') as source_type,
+                                COALESCE(bank_source_type, 'CSV') as bank_source_type,
+                                input_files, status, erro, qtd_lancamentos_extrato, 
+                                qtd_lancamentos_razao, qtd_divergencias, parsing_issues
+                            FROM comparacoes
+                        """))
+                        
+                        # Remove tabela antiga e renomeia nova
+                        conn.execute(text("DROP TABLE comparacoes"))
+                        conn.execute(text("ALTER TABLE comparacoes_new RENAME TO comparacoes"))
                         conn.execute(text("PRAGMA foreign_keys=ON"))
                     else:
                         # PostgreSQL: pode usar ALTER TABLE diretamente
@@ -183,7 +182,10 @@ def _migrate_add_new_columns():
                 except Exception as e:
                     logger.error(f"Erro na migração de schema (pode precisar recriar banco): {e}")
                     if "sqlite" in settings.database_url.lower():
-                        conn.execute(text("PRAGMA foreign_keys=ON"))
+                        try:
+                            conn.execute(text("PRAGMA foreign_keys=ON"))
+                        except Exception:
+                            pass  # Ignora se não conseguir executar
             
     except Exception as e:
         logger.warning(f"Erro na migração automática (pode ser ignorado): {e}")
