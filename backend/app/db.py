@@ -17,11 +17,11 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
-# Configuração do engine para SQLite
+# Configuração do engine para SQLite ou PostgreSQL
 connect_args = {}
 poolclass = None
 
-if "sqlite" in settings.database_url:
+if "sqlite" in settings.database_url.lower():
     # SQLite: configurações para evitar "database is locked"
     connect_args = {
         "check_same_thread": False,
@@ -38,19 +38,33 @@ if "sqlite" in settings.database_url:
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
-
-# Cria engine
-engine = create_engine(
-    settings.database_url,
-    connect_args=connect_args,
-    poolclass=poolclass,
-    pool_pre_ping=True,  # Verifica conexão antes de usar
-    echo=False
-)
-
-# Registra evento para SQLite
-if "sqlite" in settings.database_url:
+    
+    # Cria engine para SQLite
+    engine = create_engine(
+        settings.database_url,
+        connect_args=connect_args,
+        poolclass=poolclass,
+        pool_pre_ping=True,  # Verifica conexão antes de usar
+        echo=False
+    )
+    
+    # Registra evento para SQLite
     event.listen(engine, "connect", _set_sqlite_pragma)
+else:
+    # PostgreSQL (usado no Render)
+    # Render fornece DATABASE_URL no formato: postgresql://user:pass@host:port/dbname
+    # Ajusta URL se necessário (alguns drivers usam postgres:// ao invés de postgresql://)
+    db_url = settings.database_url
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    
+    engine = create_engine(
+        db_url,
+        pool_pre_ping=True,  # Verifica conexão antes de usar
+        pool_size=5,  # Pool de conexões para PostgreSQL
+        max_overflow=10,
+        echo=False
+    )
 
 # Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -110,11 +124,16 @@ def _migrate_add_new_columns():
             
             # Migração: torna caminho_extrato e caminho_razao nullable
             # SQLite não permite MODIFY COLUMN, então precisamos recriar a tabela
+            # PostgreSQL permite MODIFY, mas mantemos compatibilidade com SQLite
             if 'caminho_extrato' in columns and not columns['caminho_extrato']['nullable']:
                 logger.info("Migrando: tornando caminho_extrato e caminho_razao nullable...")
                 try:
-                    # SQLite não permite MODIFY, então recriamos a tabela
-                    conn.execute(text("PRAGMA foreign_keys=OFF"))
+                    # Verifica se é SQLite ou PostgreSQL
+                    is_sqlite = "sqlite" in settings.database_url.lower()
+                    
+                    if is_sqlite:
+                        # SQLite não permite MODIFY, então recriamos a tabela
+                        conn.execute(text("PRAGMA foreign_keys=OFF"))
                     
                     # Cria tabela temporária com schema atualizado
                     conn.execute(text("""
@@ -154,11 +173,17 @@ def _migrate_add_new_columns():
                     conn.execute(text("DROP TABLE comparacoes"))
                     conn.execute(text("ALTER TABLE comparacoes_new RENAME TO comparacoes"))
                     
-                    conn.execute(text("PRAGMA foreign_keys=ON"))
+                        conn.execute(text("PRAGMA foreign_keys=ON"))
+                    else:
+                        # PostgreSQL: pode usar ALTER TABLE diretamente
+                        conn.execute(text("ALTER TABLE comparacoes DROP COLUMN IF EXISTS caminho_extrato"))
+                        conn.execute(text("ALTER TABLE comparacoes DROP COLUMN IF EXISTS caminho_razao"))
+                    
                     logger.info("Migração concluída: caminho_extrato e caminho_razao removidos")
                 except Exception as e:
                     logger.error(f"Erro na migração de schema (pode precisar recriar banco): {e}")
-                    conn.execute(text("PRAGMA foreign_keys=ON"))
+                    if "sqlite" in settings.database_url.lower():
+                        conn.execute(text("PRAGMA foreign_keys=ON"))
             
     except Exception as e:
         logger.warning(f"Erro na migração automática (pode ser ignorado): {e}")

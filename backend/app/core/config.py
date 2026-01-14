@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = True
     
-    # Database
+    # Database (suporta SQLite local e PostgreSQL no Render)
     database_url: str = "sqlite:///./data/rpa_dominio.db"
     
     # Paths
