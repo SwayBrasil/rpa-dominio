@@ -262,7 +262,7 @@ def parse_otimiza_txt(
                             idx_inicio = 3
                         else:
                             # Fallback: usa primeira parte como data (pode falhar)
-                        data_str = partes[0].strip()
+                            data_str = partes[0].strip()
                             descricao = partes[1].strip() if len(partes) > 1 else ""
                             idx_inicio = 2
                         
@@ -281,16 +281,16 @@ def parse_otimiza_txt(
                         
                         # Procura valor (formato numérico com vírgula ou ponto decimal)
                         for i in range(idx_inicio, len(partes)):
-                                    parte_clean = partes[i].strip()
-                                    if not parte_clean:
-                                        continue
+                            parte_clean = partes[i].strip()
+                            if not parte_clean:
+                                continue
                             # Se parece com valor numérico (tem vírgula/ponto decimal)
                             if re.match(r'^[\d.,-]+$', parte_clean):
                                 # Verifica se tem vírgula ou ponto (indicando decimal)
                                 if ',' in parte_clean or ('.' in parte_clean and len(parte_clean.split('.')[-1]) <= 2):
-                                            valor_str = parte_clean
-                                        valor_idx = i
-                                        break
+                                    valor_str = parte_clean
+                                    valor_idx = i
+                                    break
                                 
                         # Se encontrou valor, procura descrição após ele
                         if valor_str and valor_idx is not None:
