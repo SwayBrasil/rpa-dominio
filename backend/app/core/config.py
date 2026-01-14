@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # Database (suporta SQLite local e PostgreSQL no Render)
     database_url: str = "sqlite:///./data/rpa_dominio.db"
     
+    # CORS
+    cors_origins: str = "http://localhost:5173,http://localhost:3000"  # Separado por vírgula
+    
     # Paths
     data_dir: Path = Path("./data")
     
