@@ -17,11 +17,18 @@ app = FastAPI(
 )
 
 # CORS
+# Configuração de origens permitidas (incluindo produção no Render)
+cors_origins = [
+    "http://localhost:5173",  # Frontend local (desenvolvimento)
+    "http://localhost:3000",  # Frontend local alternativo
+    "https://rpa-dominio.onrender.com",  # Frontend no Render (produção)
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Em produção, especificar origens
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
