@@ -289,17 +289,17 @@ def _parse_nubank(pdf_path: Path) -> Tuple[List[Lancamento], List[str]]:
                         matches2 = padrao2.findall(texto)
                         
                         for match in matches2:
-                        data_str, desc, valor_str = match
-                        data = _parse_data(data_str)
-                        if not data:
-                            continue
-                        valor = _parse_valor(valor_str)
-                        if valor == 0.0:
-                            continue
-                        
-                        lancamento = Lancamento(
-                            data=data,
-                            descricao=_normalizar_descricao(desc),
+                            data_str, desc, valor_str = match
+                            data = _parse_data(data_str)
+                            if not data:
+                                continue
+                            valor = _parse_valor(valor_str)
+                            if valor == 0.0:
+                                continue
+                            
+                            lancamento = Lancamento(
+                                data=data,
+                                descricao=_normalizar_descricao(desc),
                                 documento=None,
                                 valor=valor,
                                 saldo=None,
