@@ -32,38 +32,59 @@ export async function criarComparacao(params: {
 }
 
 /**
- * Aguarda a conclusão de uma comparação (polling).
+ * Aguarda a conclusão de uma comparação (polling com backoff).
  * @param id ID da comparação
- * @param intervaloMs Intervalo entre checks (default 2s)
- * @param timeoutMs Timeout máximo (default 180s)
+ * @param timeoutMs Timeout máximo (default 300s = 5min)
  * @returns ComparacaoDetalhe quando concluída
  * @throws Error se falhar ou timeout
  */
 export async function aguardarComparacao(
   id: number,
-  intervaloMs: number = 2000,
-  timeoutMs: number = 180000
+  timeoutMs: number = 300000
 ): Promise<ComparacaoDetalhe> {
   const inicio = Date.now();
+  let intervalo = 2000; // Começa com 2s
+  const maxIntervalo = 10000; // Máximo 10s
+  let retries = 0;
+  const maxRetries = 3;
   
   while (true) {
-    const detalhe = await obterComparacao(id);
-    
-    if (detalhe.status === "concluida") {
-      return detalhe;
+    try {
+      const detalhe = await obterComparacao(id);
+      retries = 0; // Reset retries on success
+      
+      if (detalhe.status === "concluida") {
+        return detalhe;
+      }
+      
+      if (detalhe.status === "erro") {
+        throw new Error(detalhe.erro || "Erro no processamento da comparação");
+      }
+      
+      if (detalhe.status === "timeout") {
+        throw new Error(detalhe.erro || "Processamento demorou muito. Tente um PDF menor.");
+      }
+      
+      // Verifica timeout do polling
+      if (Date.now() - inicio > timeoutMs) {
+        throw new Error("Timeout: processamento demorou mais que o esperado");
+      }
+      
+      // Aguarda com backoff
+      await new Promise(resolve => setTimeout(resolve, intervalo));
+      intervalo = Math.min(intervalo * 1.5, maxIntervalo); // Backoff
+      
+    } catch (error: unknown) {
+      // Se for erro de rede, tenta novamente
+      const axiosError = error as { code?: string; message?: string };
+      if (axiosError.code === "ERR_NETWORK" && retries < maxRetries) {
+        retries++;
+        console.warn(`Erro de rede, tentativa ${retries}/${maxRetries}...`);
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Aguarda 5s
+        continue;
+      }
+      throw error;
     }
-    
-    if (detalhe.status === "erro") {
-      throw new Error(detalhe.erro || "Erro no processamento da comparação");
-    }
-    
-    // Verifica timeout
-    if (Date.now() - inicio > timeoutMs) {
-      throw new Error("Timeout: processamento demorou mais que o esperado");
-    }
-    
-    // Aguarda antes do próximo check
-    await new Promise(resolve => setTimeout(resolve, intervaloMs));
   }
 }
 

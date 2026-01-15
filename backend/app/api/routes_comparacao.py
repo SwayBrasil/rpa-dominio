@@ -126,9 +126,11 @@ def processar_comparacao_background(
         issues_mpds = []
         
         try:
+            import os
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
             
-            PDF_TIMEOUT_SECONDS = 30  # Timeout para parsing de PDF
+            # Timeout configurável via env (default 120s para Render)
+            PDF_TIMEOUT_SECONDS = int(os.getenv("PDF_PARSE_TIMEOUT_SECONDS", "120"))
             
             if bank_source_type == 'CSV':
                 lanc_mpds, issues_mpds = parse_mpds_csv(Path(mpds_path), strict=False)
@@ -144,7 +146,12 @@ def processar_comparacao_background(
                         lanc_mpds, issues_mpds = future.result(timeout=PDF_TIMEOUT_SECONDS)
                     except FuturesTimeoutError:
                         logger.error(f"[BG] TIMEOUT: parsing PDF demorou mais de {PDF_TIMEOUT_SECONDS}s")
-                        raise RuntimeError(f"Timeout: parsing do PDF demorou mais de {PDF_TIMEOUT_SECONDS} segundos")
+                        # Marca como timeout específico
+                        comparacao.status = "timeout"
+                        comparacao.erro = f"PDF parsing timeout após {PDF_TIMEOUT_SECONDS}s. Tente um PDF menor."
+                        comparacao.finished_at = datetime.utcnow()
+                        db.commit()
+                        return  # Sai do worker sem raise
                 
                 logger.info(f"[BG] parse_mpds_pdf retornou {len(lanc_mpds)} lançamentos")
             else:
