@@ -446,14 +446,19 @@ def rodar_comparacao_txt_multiplos(
             raise RuntimeError(f"Falha no parsing TXT: {e}")
         
         # 4) Parsing do extrato bancário
+        import time
         logger.info(f"Iniciando parsing do extrato bancário ({bank_source_type})...")
+        logger.info(f"Tamanho do arquivo: {len(mpds_file_bytes)} bytes")
+        start_time = time.time()
         try:
             if bank_source_type == 'CSV':
                 lanc_mpds, issues_mpds = parse_mpds_csv(mpds_path, strict=False)
             elif bank_source_type == 'OFX':
                 lanc_mpds, issues_mpds = parse_mpds_ofx(mpds_path, strict=False)
             elif bank_source_type == 'PDF':
+                logger.info("Chamando parse_mpds_pdf...")
                 lanc_mpds, issues_mpds = parse_mpds_pdf(mpds_path, strict=False)
+                logger.info(f"parse_mpds_pdf retornou em {time.time() - start_time:.2f}s")
             else:
                 raise ValueError(f"Formato de extrato não suportado: {bank_source_type}")
             

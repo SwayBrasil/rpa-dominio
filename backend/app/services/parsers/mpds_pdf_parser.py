@@ -1032,16 +1032,22 @@ def parse_mpds_pdf(
     if not path.suffix.lower() == '.pdf':
         raise ValueError(f"Arquivo deve ser PDF: {path}")
     
-    logger.info(f"Iniciando parsing do PDF MPDS: {path}")
+    import os
+    file_size = os.path.getsize(path)
+    logger.info(f"Iniciando parsing do PDF MPDS: {path} (tamanho: {file_size} bytes)")
     
     lancamentos = []
     issues = []
     
     try:
         # Detecta banco pela primeira página
+        logger.info("Abrindo PDF com pdfplumber...")
         with pdfplumber.open(path) as pdf:
+            logger.info(f"PDF aberto. Páginas: {len(pdf.pages)}")
             primeira_pagina = pdf.pages[0]
+            logger.info("Extraindo texto da primeira página...")
             texto_primeira = primeira_pagina.extract_text() or ""
+            logger.info(f"Texto extraído ({len(texto_primeira)} chars). Detectando banco...")
             banco = _detectar_banco(texto_primeira)
         
         logger.info(f"Banco detectado: {banco}")
