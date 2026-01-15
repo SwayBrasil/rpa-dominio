@@ -1,16 +1,18 @@
 """
 Rotas FastAPI para comparações
+Implementa processamento assíncrono para evitar timeout no Render
 """
 
 import logging
+import json
+import tempfile
+import shutil
+from pathlib import Path
 from typing import List, Optional
-import asyncio
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
-from sqlalchemy.orm import Session
-from datetime import date
-from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, date
 
-logger = logging.getLogger(__name__)
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form, BackgroundTasks
+from sqlalchemy.orm import Session
 
 from app.api.schemas_comparacao import (
     ComparacaoCreate,
@@ -18,166 +20,332 @@ from app.api.schemas_comparacao import (
     ComparacaoDetalhe,
     AccountValidationResultSchema,
     AccountValidationSummary,
+    DivergenciaSchema,
 )
 from app.models.plano_contas import AccountValidationResult
-from app.services.comparador.service import rodar_comparacao_txt, rodar_comparacao_txt_multiplos
 from app.models.comparacao import Comparacao, DivergenciaDB
-from app.db import get_db
+from app.db import get_db, SessionLocal
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/comparacoes", tags=["comparacoes"])
 
 
+# ============================================================================
+# WORKER DE BACKGROUND - Processa comparação de forma assíncrona
+# ============================================================================
+
+def processar_comparacao_background(
+    comparacao_id: int,
+    otimiza_paths: List[str],
+    mpds_path: str,
+    bank_source_type: str,
+    data_inicio: date,
+    data_fim: date,
+    temp_dir: str,
+):
+    """
+    Worker que processa a comparação em background.
+    Atualiza o status no banco conforme progride.
+    """
+    import time
+    start_time = time.time()
+    
+    # Cria sessão própria (background task não tem acesso à sessão do request)
+    db = SessionLocal()
+    
+    try:
+        logger.info(f"[BG] Iniciando processamento da comparação {comparacao_id}")
+        
+        # Atualiza started_at
+        comparacao = db.query(Comparacao).filter(Comparacao.id == comparacao_id).first()
+        if not comparacao:
+            logger.error(f"[BG] Comparação {comparacao_id} não encontrada")
+            return
+        
+        comparacao.started_at = datetime.utcnow()
+        db.commit()
+        
+        # Importa funções de parsing
+        from app.services.parsers.otimiza_txt_parser import parse_otimiza_txt
+        from app.services.parsers.mpds_csv_parser import parse_mpds_csv
+        from app.services.parsers.mpds_ofx_parser import parse_mpds_ofx
+        from app.services.parsers.mpds_pdf_parser import parse_mpds_pdf
+        from app.services.comparador.motor import compare_bank_vs_txt
+        from app.services.validations.account_validation import validate_lancamentos_accounts
+        from app.core.divergencias import Divergencia as DivergenciaModelo
+        
+        all_lancamentos_txt = []
+        all_issues_txt = []
+        
+        # 1) Parse dos TXTs
+        logger.info(f"[BG] Parsing de {len(otimiza_paths)} arquivo(s) TXT...")
+        txt_start = time.time()
+        
+        for txt_path in otimiza_paths:
+            try:
+                lancamentos, issues = parse_otimiza_txt(Path(txt_path), strict=False)
+                
+                # Normaliza sinal baseado no nome do arquivo
+                txt_nome_upper = Path(txt_path).name.upper()
+                if "PAGAR" in txt_nome_upper:
+                    for lanc in lancamentos:
+                        lanc.valor = -abs(lanc.valor)
+                elif "RECEBER" in txt_nome_upper:
+                    for lanc in lancamentos:
+                        lanc.valor = abs(lanc.valor)
+                
+                all_lancamentos_txt.extend(lancamentos)
+                all_issues_txt.extend(issues)
+                logger.info(f"[BG] TXT {Path(txt_path).name}: {len(lancamentos)} lançamentos")
+            except Exception as e:
+                logger.exception(f"[BG] Erro no parsing TXT {txt_path}: {e}")
+                all_issues_txt.append(f"Erro em {Path(txt_path).name}: {str(e)}")
+        
+        logger.info(f"[BG] Parsing TXT concluído em {time.time()-txt_start:.2f}s: {len(all_lancamentos_txt)} lançamentos")
+        
+        comparacao.qtd_lancamentos_razao = len(all_lancamentos_txt)
+        db.commit()
+        
+        # 2) Parse do extrato bancário
+        logger.info(f"[BG] Parsing do extrato {bank_source_type}...")
+        pdf_start = time.time()
+        
+        lanc_mpds = []
+        issues_mpds = []
+        
+        try:
+            if bank_source_type == 'CSV':
+                lanc_mpds, issues_mpds = parse_mpds_csv(Path(mpds_path), strict=False)
+            elif bank_source_type == 'OFX':
+                lanc_mpds, issues_mpds = parse_mpds_ofx(Path(mpds_path), strict=False)
+            elif bank_source_type == 'PDF':
+                lanc_mpds, issues_mpds = parse_mpds_pdf(Path(mpds_path), strict=False)
+            else:
+                raise ValueError(f"Formato não suportado: {bank_source_type}")
+            
+            logger.info(f"[BG] Parsing extrato concluído em {time.time()-pdf_start:.2f}s: {len(lanc_mpds)} movimentações")
+        except Exception as e:
+            logger.exception(f"[BG] Erro no parsing do extrato: {e}")
+            raise RuntimeError(f"Falha no parsing do extrato: {str(e)}")
+        
+        comparacao.qtd_lancamentos_extrato = len(lanc_mpds)
+        comparacao.parsing_issues = json.dumps({
+            "txt_issues": all_issues_txt,
+            "mpds_issues": issues_mpds
+        })
+        db.commit()
+        
+        # 3) Comparação
+        logger.info("[BG] Iniciando comparação...")
+        cmp_start = time.time()
+        
+        divergencias: List[DivergenciaModelo] = compare_bank_vs_txt(
+            bank_movements=lanc_mpds,
+            txt_movements=all_lancamentos_txt,
+            date_window_days=2,
+            amount_tolerance=0.01,
+            min_description_similarity=0.55,
+            allow_many_to_one=True,
+        )
+        
+        logger.info(f"[BG] Comparação concluída em {time.time()-cmp_start:.2f}s: {len(divergencias)} divergências")
+        
+        comparacao.qtd_divergencias = len(divergencias)
+        db.commit()
+        
+        # 4) Salva divergências no banco
+        for div in divergencias:
+            div_db = DivergenciaDB(
+                comparacao_id=comparacao_id,
+                tipo=div.tipo.value if hasattr(div.tipo, 'value') else str(div.tipo),
+                descricao=div.descricao,
+                data_extrato=div.data_extrato,
+                descricao_extrato=div.descricao_extrato,
+                valor_extrato=div.valor_extrato,
+                documento_extrato=div.documento_extrato,
+                conta_contabil_extrato=div.conta_contabil_extrato,
+                data_dominio=div.data_dominio,
+                descricao_dominio=div.descricao_dominio,
+                valor_dominio=div.valor_dominio,
+                documento_dominio=div.documento_dominio,
+                conta_contabil_dominio=div.conta_contabil_dominio,
+            )
+            db.add(div_db)
+        
+        db.commit()
+        
+        # 5) Validação de contas (opcional)
+        try:
+            all_lancamentos = lanc_mpds + all_lancamentos_txt
+            validation_results = validate_lancamentos_accounts(all_lancamentos, db)
+            
+            for result in validation_results:
+                result.comparacao_id = comparacao_id
+                db.add(result)
+            
+            db.commit()
+            logger.info(f"[BG] Validação de contas: {len(validation_results)} resultados")
+        except Exception as e:
+            logger.warning(f"[BG] Validação de contas falhou (não crítico): {e}")
+        
+        # 6) Finaliza com sucesso
+        comparacao.status = "concluida"
+        comparacao.finished_at = datetime.utcnow()
+        db.commit()
+        
+        total_time = time.time() - start_time
+        logger.info(f"[BG] Comparação {comparacao_id} concluída com sucesso em {total_time:.2f}s")
+        
+    except Exception as e:
+        logger.exception(f"[BG] Erro fatal na comparação {comparacao_id}: {e}")
+        
+        try:
+            comparacao = db.query(Comparacao).filter(Comparacao.id == comparacao_id).first()
+            if comparacao:
+                comparacao.status = "erro"
+                comparacao.erro = str(e)[:500]  # Limita tamanho
+                comparacao.finished_at = datetime.utcnow()
+                db.commit()
+        except Exception as db_error:
+            logger.error(f"[BG] Erro ao salvar status de erro: {db_error}")
+    
+    finally:
+        db.close()
+        
+        # Limpa arquivos temporários
+        try:
+            if temp_dir and Path(temp_dir).exists():
+                shutil.rmtree(temp_dir)
+                logger.info(f"[BG] Arquivos temporários removidos: {temp_dir}")
+        except Exception as e:
+            logger.warning(f"[BG] Erro ao limpar temp: {e}")
+
+
+# ============================================================================
+# ENDPOINTS
+# ============================================================================
+
 @router.post("/", response_model=ComparacaoResumo, status_code=201)
 async def criar_comparacao(
+    background_tasks: BackgroundTasks,
     data_inicio: date = Form(...),
     data_fim: date = Form(...),
-    otimiza_txt: UploadFile = File(None),  # Mantido para compatibilidade
-    otimiza_txt_files: List[UploadFile] = File(None),  # Novo: aceita múltiplos
+    otimiza_txt: UploadFile = File(None),
+    otimiza_txt_files: List[UploadFile] = File(None),
     mpds_csv: UploadFile = File(None),
     mpds_ofx: UploadFile = File(None),
-    mpds_pdf: UploadFile = File(None),  # Obrigatório no modo cliente, opcional para compatibilidade
+    mpds_pdf: UploadFile = File(None),
     db: Session = Depends(get_db),
 ):
     """
-    Cria uma nova comparação entre TXT(s) Otimiza e extrato bancário em PDF.
+    Cria uma nova comparação (processamento assíncrono).
     
-    O sistema compara:
-    - Lançamentos contábeis do TXT Otimiza (PAGAR e/ou RECEBER)
-    - Movimentações bancárias do extrato em PDF (Nubank/Sicoob)
-    
-    Processo:
-    1. Faz parsing dos arquivos
-    2. Unifica lançamentos se houver múltiplos TXTs
-    3. Compara e detecta divergências
-    4. Valida contas contábeis usando o Plano de Contas (se carregado)
-    5. Retorna resumo e detalhes
-    
-    Args:
-        data_inicio: Data inicial do período
-        data_fim: Data final do período
-        otimiza_txt: Arquivo TXT do Otimiza (obrigatório se otimiza_txt_files não fornecido)
-        otimiza_txt_files: Lista de arquivos TXT do Otimiza (PAGAR e/ou RECEBER, max 2)
-        mpds_pdf: Arquivo PDF do extrato bancário - Nubank/Sicoob (obrigatório)
-        mpds_csv: Arquivo MPDS em formato CSV (suporte interno, não usado na UI principal)
-        mpds_ofx: Arquivo MPDS em formato OFX (suporte interno, não usado na UI principal)
-        
-    Nota: No modo cliente, use mpds_pdf (obrigatório) e otimiza_txt_files (1 ou 2 arquivos).
-          CSV/OFX ficam disponíveis para suporte interno.
+    Retorna imediatamente com status="processing".
+    Use GET /comparacoes/{id} para verificar o progresso.
     """
-    # Valida período
+    # Validações
     if data_inicio > data_fim:
-        raise HTTPException(
-            status_code=400,
-            detail="Data inicial deve ser anterior à data final"
-        )
+        raise HTTPException(status_code=400, detail="Data inicial deve ser anterior à data final")
     
-    # Coleta arquivos TXT Otimiza (suporta ambos os formatos para compatibilidade)
+    # Coleta arquivos TXT
     otimiza_files = []
-    
-    # Se forneceu otimiza_txt_files (novo formato)
     if otimiza_txt_files:
-        otimiza_files = otimiza_txt_files
-    # Se forneceu otimiza_txt (formato antigo para compatibilidade)
-    elif otimiza_txt:
+        otimiza_files = [f for f in otimiza_txt_files if f and f.filename]
+    elif otimiza_txt and otimiza_txt.filename:
         otimiza_files = [otimiza_txt]
     
-    # Valida que pelo menos um TXT foi fornecido
     if not otimiza_files:
-        raise HTTPException(
-            status_code=400,
-            detail="É necessário fornecer pelo menos um arquivo TXT do Otimiza (PAGAR e/ou RECEBER)"
-        )
+        raise HTTPException(status_code=400, detail="É necessário fornecer pelo menos um arquivo TXT do Otimiza")
     
-    # Valida quantidade máxima de TXTs (2: PAGAR + RECEBER)
     if len(otimiza_files) > 2:
-        raise HTTPException(
-            status_code=400,
-            detail="É permitido enviar no máximo 2 arquivos TXT do Otimiza (PAGAR e RECEBER)"
-        )
+        raise HTTPException(status_code=400, detail="Máximo 2 arquivos TXT permitidos")
     
-    # Valida que pelo menos um arquivo bancário foi fornecido
-    # No modo cliente, PDF é obrigatório, mas mantemos CSV/OFX para compatibilidade
-    mpds_count = sum([bool(mpds_csv), bool(mpds_ofx), bool(mpds_pdf)])
+    # Identifica arquivo bancário
+    mpds_file = None
+    bank_source_type = None
     
-    if mpds_count == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="É necessário fornecer o extrato bancário (PDF, CSV ou OFX). No modo cliente, use PDF."
-        )
+    if mpds_pdf and mpds_pdf.filename:
+        mpds_file = mpds_pdf
+        bank_source_type = "PDF"
+    elif mpds_ofx and mpds_ofx.filename:
+        mpds_file = mpds_ofx
+        bank_source_type = "OFX"
+    elif mpds_csv and mpds_csv.filename:
+        mpds_file = mpds_csv
+        bank_source_type = "CSV"
     
-    if mpds_count > 1:
-        raise HTTPException(
-            status_code=400,
-            detail="Forneça apenas um arquivo de extrato bancário (PDF, CSV ou OFX), não múltiplos"
-        )
+    if not mpds_file:
+        raise HTTPException(status_code=400, detail="É necessário fornecer o extrato bancário (PDF, CSV ou OFX)")
+    
+    # Cria diretório temporário para os arquivos
+    temp_dir = tempfile.mkdtemp(prefix="comparacao_")
+    logger.info(f"Criando comparação. Temp dir: {temp_dir}")
     
     try:
-        # Lê arquivos TXT Otimiza
-        otimiza_data = []
-        for otimiza_file in otimiza_files:
-            otimiza_bytes = await otimiza_file.read()
-        if len(otimiza_bytes) == 0:
-            raise HTTPException(
-                status_code=400,
-                    detail=f"Arquivo TXT Otimiza vazio: {otimiza_file.filename or 'sem nome'}"
-            )
-            otimiza_nome = otimiza_file.filename or "otimiza.txt"
-            otimiza_data.append((otimiza_bytes, otimiza_nome))
+        # Salva arquivos TXT
+        otimiza_paths = []
+        for i, txt_file in enumerate(otimiza_files):
+            txt_bytes = await txt_file.read()
+            if len(txt_bytes) == 0:
+                raise HTTPException(status_code=400, detail=f"Arquivo TXT vazio: {txt_file.filename}")
+            
+            txt_path = Path(temp_dir) / f"txt_{i}_{txt_file.filename}"
+            txt_path.write_bytes(txt_bytes)
+            otimiza_paths.append(str(txt_path))
+            logger.info(f"TXT salvo: {txt_path} ({len(txt_bytes)} bytes)")
         
-        # Lê arquivo bancário (prioridade: PDF > OFX > CSV para modo cliente)
-        mpds_bytes = None
-        mpds_nome = None
-        bank_source_type = "PDF"
-        
-        if mpds_pdf:
-            mpds_bytes = await mpds_pdf.read()
-            mpds_nome = mpds_pdf.filename or "extrato.pdf"
-            bank_source_type = "PDF"
-        elif mpds_ofx:
-            mpds_bytes = await mpds_ofx.read()
-            mpds_nome = mpds_ofx.filename or "extrato.ofx"
-            bank_source_type = "OFX"
-        elif mpds_csv:
-            mpds_bytes = await mpds_csv.read()
-            mpds_nome = mpds_csv.filename or "extrato.csv"
-            bank_source_type = "CSV"
-        
+        # Salva arquivo bancário
+        mpds_bytes = await mpds_file.read()
         if len(mpds_bytes) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Arquivo de extrato bancário vazio"
-            )
+            raise HTTPException(status_code=400, detail="Arquivo de extrato bancário vazio")
         
-        # Executa comparação em thread separada
-        loop = asyncio.get_event_loop()
-        comparacao = await loop.run_in_executor(
-            None,
-            rodar_comparacao_txt_multiplos,
-            db,
-            otimiza_data,  # Lista de tuplas (bytes, nome)
-            mpds_bytes,
-            mpds_nome,
+        mpds_path = Path(temp_dir) / f"extrato_{mpds_file.filename}"
+        mpds_path.write_bytes(mpds_bytes)
+        logger.info(f"Extrato salvo: {mpds_path} ({len(mpds_bytes)} bytes)")
+        
+        # Cria registro no banco com status="processing"
+        comparacao = Comparacao(
+            periodo_inicio=data_inicio,
+            periodo_fim=data_fim,
+            source_type="OTIMIZA_TXT",
+            bank_source_type=bank_source_type,
+            status="processing",
+            input_files=json.dumps({
+                "otimiza_txt_paths": [Path(p).name for p in otimiza_paths],
+                "extrato_path": mpds_file.filename,
+                "temp_dir": temp_dir
+            })
+        )
+        db.add(comparacao)
+        db.commit()
+        db.refresh(comparacao)
+        
+        logger.info(f"Comparação {comparacao.id} criada. Disparando processamento em background...")
+        
+        # Dispara processamento em background
+        background_tasks.add_task(
+            processar_comparacao_background,
+            comparacao.id,
+            otimiza_paths,
+            str(mpds_path),
             bank_source_type,
             data_inicio,
             data_fim,
+            temp_dir,
         )
         
+        # Retorna imediatamente
         return comparacao
         
     except HTTPException:
+        # Limpa temp em caso de erro de validação
+        shutil.rmtree(temp_dir, ignore_errors=True)
         raise
-    except RuntimeError as e:
-        logger.exception(f"RuntimeError ao processar comparação: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao processar comparação: {str(e)}"
-        )
     except Exception as e:
-        logger.exception(f"Exception ao processar comparação: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro inesperado: {str(e)}"
-        )
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.exception(f"Erro ao criar comparação: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao criar comparação: {str(e)}")
 
 
 @router.get("/", response_model=List[ComparacaoResumo])
@@ -186,9 +354,7 @@ def listar_comparacoes(
     limit: int = 100,
     db: Session = Depends(get_db)
 ):
-    """
-    Lista todas as comparações realizadas, ordenadas por data de criação (mais recentes primeiro).
-    """
+    """Lista todas as comparações (mais recentes primeiro)."""
     comparacoes = (
         db.query(Comparacao)
         .order_by(Comparacao.criado_em.desc())
@@ -202,53 +368,46 @@ def listar_comparacoes(
 @router.get("/{comparacao_id}", response_model=ComparacaoDetalhe)
 def obter_comparacao(comparacao_id: int, db: Session = Depends(get_db)):
     """
-    Obtém detalhes de uma comparação específica, incluindo todas as divergências e resumo de validação de contas.
+    Obtém detalhes de uma comparação.
+    
+    - Se status="processing": retorna dados parciais, divergencias=[]
+    - Se status="concluida": retorna dados completos
+    - Se status="erro": retorna erro em 'erro'
     """
-    comparacao = (
-        db.query(Comparacao)
-        .filter(Comparacao.id == comparacao_id)
-        .first()
-    )
+    comparacao = db.query(Comparacao).filter(Comparacao.id == comparacao_id).first()
     
     if not comparacao:
-        raise HTTPException(
-            status_code=404,
-            detail="Comparação não encontrada"
+        raise HTTPException(status_code=404, detail="Comparação não encontrada")
+    
+    # Busca divergências (vazio se ainda processando)
+    divergencias = []
+    if comparacao.status == "concluida":
+        divergencias_db = (
+            db.query(DivergenciaDB)
+            .filter(DivergenciaDB.comparacao_id == comparacao_id)
+            .all()
         )
+        divergencias = [DivergenciaSchema.model_validate(d) for d in divergencias_db]
     
     # Busca resumo de validação de contas
-    validation_results = (
-        db.query(AccountValidationResult)
-        .filter(AccountValidationResult.comparacao_id == comparacao_id)
-        .all()
-    )
-    
     validation_summary = None
-    if validation_results:
-        total = len(validation_results)
-        ok = sum(1 for r in validation_results if r.status == "ok")
-        invalid = sum(1 for r in validation_results if r.status == "invalid")
-        unknown = sum(1 for r in validation_results if r.status == "unknown")
-        
-        validation_summary = AccountValidationSummary(
-            total=total,
-            ok=ok,
-            invalid=invalid,
-            unknown=unknown
+    if comparacao.status == "concluida":
+        validation_results = (
+            db.query(AccountValidationResult)
+            .filter(AccountValidationResult.comparacao_id == comparacao_id)
+            .all()
         )
+        if validation_results:
+            validation_summary = AccountValidationSummary(
+                total=len(validation_results),
+                ok=sum(1 for r in validation_results if r.status == "ok"),
+                invalid=sum(1 for r in validation_results if r.status == "invalid"),
+                unknown=sum(1 for r in validation_results if r.status == "unknown")
+            )
     
-    # Busca divergências
-    divergencias = (
-        db.query(DivergenciaDB)
-        .filter(DivergenciaDB.comparacao_id == comparacao_id)
-        .all()
-    )
-    
-    # Retorna usando from_attributes do Pydantic
-    from app.api.schemas_comparacao import ComparacaoDetalhe, DivergenciaSchema
-    
+    # Monta resposta
     detalhe = ComparacaoDetalhe.model_validate(comparacao)
-    detalhe.divergencias = [DivergenciaSchema.model_validate(d) for d in divergencias]
+    detalhe.divergencias = divergencias
     detalhe.account_validation_summary = validation_summary
     
     return detalhe
@@ -262,15 +421,7 @@ def obter_validacao_contas(
     status: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """
-    Obtém resultados de validação de contas de uma comparação.
-    
-    Args:
-        comparacao_id: ID da comparação
-        skip: Paginação
-        limit: Limite de resultados
-        status: Filtrar por status (ok, invalid, unknown)
-    """
+    """Obtém resultados de validação de contas."""
     query = (
         db.query(AccountValidationResult)
         .filter(AccountValidationResult.comparacao_id == comparacao_id)
@@ -279,9 +430,7 @@ def obter_validacao_contas(
     if status:
         query = query.filter(AccountValidationResult.status == status)
     
-    results = query.order_by(AccountValidationResult.created_at.desc()).offset(skip).limit(limit).all()
-    
-    return results
+    return query.order_by(AccountValidationResult.created_at.desc()).offset(skip).limit(limit).all()
 
 
 @router.get("/{comparacao_id}/divergencias")
@@ -292,81 +441,35 @@ def obter_divergencias(
     tipo: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """
-    Obtém divergências de uma comparação.
-    
-    Args:
-        comparacao_id: ID da comparação
-        skip: Paginação
-        limit: Limite de resultados
-        tipo: Filtrar por tipo de divergência
-    """
-    comparacao = (
-        db.query(Comparacao)
-        .filter(Comparacao.id == comparacao_id)
-        .first()
-    )
+    """Obtém divergências de uma comparação."""
+    comparacao = db.query(Comparacao).filter(Comparacao.id == comparacao_id).first()
     
     if not comparacao:
-        raise HTTPException(
-            status_code=404,
-            detail="Comparação não encontrada"
-        )
+        raise HTTPException(status_code=404, detail="Comparação não encontrada")
     
-    query = (
-        db.query(DivergenciaDB)
-        .filter(DivergenciaDB.comparacao_id == comparacao_id)
-    )
+    query = db.query(DivergenciaDB).filter(DivergenciaDB.comparacao_id == comparacao_id)
     
     if tipo:
         query = query.filter(DivergenciaDB.tipo == tipo)
     
     results = query.order_by(DivergenciaDB.id.desc()).offset(skip).limit(limit).all()
-    
-    # Converte para schema Pydantic
-    from app.api.schemas_comparacao import DivergenciaSchema
     return [DivergenciaSchema.model_validate(d) for d in results]
 
 
 @router.delete("/{comparacao_id}", status_code=204)
 def deletar_comparacao(comparacao_id: int, db: Session = Depends(get_db)):
-    """
-    Deleta uma comparação e todas as suas divergências.
-    """
-    comparacao = (
-        db.query(Comparacao)
-        .filter(Comparacao.id == comparacao_id)
-        .first()
-    )
+    """Deleta uma comparação e todos os dados relacionados."""
+    comparacao = db.query(Comparacao).filter(Comparacao.id == comparacao_id).first()
     
     if not comparacao:
-        raise HTTPException(
-            status_code=404,
-            detail="Comparação não encontrada"
-        )
+        raise HTTPException(status_code=404, detail="Comparação não encontrada")
     
-    # Deleta divergências relacionadas primeiro (evita FOREIGN KEY constraint)
-    # SQLite pode não respeitar cascade delete corretamente
-    divergencias_count = db.query(DivergenciaDB).filter(DivergenciaDB.comparacao_id == comparacao_id).count()
-    if divergencias_count > 0:
-        db.query(DivergenciaDB).filter(DivergenciaDB.comparacao_id == comparacao_id).delete(synchronize_session=False)
-        db.flush()  # Flush explícito para garantir que as divergências foram deletadas
+    # Deleta dados relacionados primeiro
+    db.query(DivergenciaDB).filter(DivergenciaDB.comparacao_id == comparacao_id).delete(synchronize_session=False)
+    db.query(AccountValidationResult).filter(AccountValidationResult.comparacao_id == comparacao_id).delete(synchronize_session=False)
+    db.flush()
     
-    # Deleta AccountValidationResult relacionado (se existir)
-    from app.models.plano_contas import AccountValidationResult
-    validations_count = db.query(AccountValidationResult).filter(
-        AccountValidationResult.comparacao_id == comparacao_id
-    ).count()
-    if validations_count > 0:
-        db.query(AccountValidationResult).filter(
-            AccountValidationResult.comparacao_id == comparacao_id
-        ).delete(synchronize_session=False)
-        db.flush()  # Flush explícito para garantir que as validações foram deletadas
-    
-    # Agora pode deletar a comparação
     db.delete(comparacao)
-    # Não faz commit aqui - get_db() faz commit automaticamente
     db.flush()
     
     return None
-

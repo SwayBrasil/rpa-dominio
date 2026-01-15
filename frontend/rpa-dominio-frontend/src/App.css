@@ -311,7 +311,8 @@ select:focus {
   color: #065f46;
 }
 
-.status-badge.status-processando {
+.status-badge.status-processando,
+.status-badge.status-processing {
   background: #fef3c7;
   color: #92400e;
 }

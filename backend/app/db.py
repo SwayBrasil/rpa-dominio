@@ -122,6 +122,20 @@ def _migrate_add_new_columns():
                 except Exception as e:
                     logger.warning(f"Erro ao adicionar parsing_issues (pode já existir): {e}")
             
+            # Adiciona started_at se não existir
+            if 'started_at' not in columns:
+                try:
+                    conn.execute(text("ALTER TABLE comparacoes ADD COLUMN started_at DATETIME"))
+                except Exception as e:
+                    logger.warning(f"Erro ao adicionar started_at (pode já existir): {e}")
+            
+            # Adiciona finished_at se não existir
+            if 'finished_at' not in columns:
+                try:
+                    conn.execute(text("ALTER TABLE comparacoes ADD COLUMN finished_at DATETIME"))
+                except Exception as e:
+                    logger.warning(f"Erro ao adicionar finished_at (pode já existir): {e}")
+            
             # Migração: torna caminho_extrato e caminho_razao nullable
             # SQLite não permite MODIFY COLUMN, então precisamos recriar a tabela
             # PostgreSQL permite MODIFY, mas mantemos compatibilidade com SQLite

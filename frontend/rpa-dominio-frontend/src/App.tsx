@@ -5,6 +5,7 @@ import {
   listarComparacoes,
   obterComparacao,
   deletarComparacao,
+  aguardarComparacao,
 } from "./api/comparacoes";
 import {
   ComparacaoResumo,
@@ -109,9 +110,10 @@ function App() {
     }
 
     setCriando(true);
-    setMensagem("Processando comparação...");
+    setMensagem("Enviando arquivos...");
 
     try {
+      // 1) Cria comparação (retorna imediatamente com status="processing")
       const nova = await criarComparacao({
         data_inicio: dataInicio,
         data_fim: dataFim,
@@ -119,14 +121,28 @@ function App() {
         mpds_pdf: mpdsPdfFile,
       });
 
-      setMensagem(
-        `Comparação criada com sucesso (ID ${nova.id}).`
-      );
+      setMensagem(`Processando comparação (ID ${nova.id})... Aguarde.`);
+      
       // Limpa arquivos
       setOtimizaTxtFiles([]);
       setMpdsPdfFile(null);
-      // Atualiza lista
+      
+      // Atualiza lista para mostrar status "processing"
       await carregarComparacoes();
+
+      // 2) Polling até conclusão
+      try {
+        const resultado = await aguardarComparacao(nova.id, 2000, 180000);
+        setMensagem(`Comparação ${nova.id} concluída! ${resultado.qtd_divergencias ?? 0} divergências encontradas.`);
+        setComparacaoSelecionada(resultado);
+      } catch (pollError: any) {
+        // Erro no processamento ou timeout
+        setErro(pollError.message || "Erro durante processamento");
+      }
+      
+      // Atualiza lista final
+      await carregarComparacoes();
+      
     } catch (e: any) {
       console.error(e);
       const detail =

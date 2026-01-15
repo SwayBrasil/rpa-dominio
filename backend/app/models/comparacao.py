@@ -20,6 +20,8 @@ class Comparacao(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     criado_em = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)  # Início do processamento
+    finished_at = Column(DateTime, nullable=True)  # Fim do processamento
     
     # Metadados da comparação
     periodo_inicio = Column(Date, nullable=False)

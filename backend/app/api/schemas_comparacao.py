@@ -50,11 +50,14 @@ class ComparacaoResumo(BaseModel):
     
     id: int
     criado_em: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
     periodo_inicio: date
     periodo_fim: date
     source_type: str
     bank_source_type: str
-    status: str
+    status: str  # processing | done | failed
+    erro: Optional[str] = None  # Mensagem de erro se status=failed
     qtd_lancamentos_extrato: Optional[int] = None  # MPDS (movimentações bancárias)
     qtd_lancamentos_razao: Optional[int] = None  # TXT Otimiza (lançamentos contábeis)
     qtd_divergencias: Optional[int] = None

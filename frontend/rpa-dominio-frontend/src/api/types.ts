@@ -3,13 +3,16 @@
 export interface ComparacaoResumo {
   id: number;
   criado_em: string;
+  started_at?: string | null;
+  finished_at?: string | null;
   periodo_inicio: string;
   periodo_fim: string;
   source_type?: string;
   bank_source_type?: string;
-  status: string;
-  qtd_lancamentos_extrato?: number | null; // MPDS (movimentações bancárias)
-  qtd_lancamentos_razao?: number | null; // TXT Otimiza (lançamentos contábeis)
+  status: string;  // "processing" | "concluida" | "erro"
+  erro?: string | null;  // Mensagem de erro se status="erro"
+  qtd_lancamentos_extrato?: number | null;
+  qtd_lancamentos_razao?: number | null;
   qtd_divergencias?: number | null;
 }
 
