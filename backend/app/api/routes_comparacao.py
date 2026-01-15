@@ -53,6 +53,12 @@ def processar_comparacao_background(
     """
     import time
     import traceback
+    import sys
+    
+    # Log imediato para confirmar que o worker iniciou
+    print(f"[BG] Worker iniciado para comparação {comparacao_id}", file=sys.stderr, flush=True)
+    logger.info(f"[BG] Worker iniciado para comparação {comparacao_id}")
+    
     start_time = time.time()
     db = None
     
@@ -60,7 +66,7 @@ def processar_comparacao_background(
         # Cria sessão própria (background task não tem acesso à sessão do request)
         db = SessionLocal()
         
-        logger.info(f"[BG] Iniciando processamento da comparação {comparacao_id}")
+        logger.info(f"[BG] Sessão DB criada, iniciando processamento da comparação {comparacao_id}")
         
         # Atualiza started_at
         comparacao = db.query(Comparacao).filter(Comparacao.id == comparacao_id).first()
