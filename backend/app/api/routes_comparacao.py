@@ -2,12 +2,15 @@
 Rotas FastAPI para comparações
 """
 
+import logging
 from typing import List, Optional
 import asyncio
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
 from sqlalchemy.orm import Session
 from datetime import date
 from concurrent.futures import ThreadPoolExecutor
+
+logger = logging.getLogger(__name__)
 
 from app.api.schemas_comparacao import (
     ComparacaoCreate,
@@ -164,11 +167,13 @@ async def criar_comparacao(
     except HTTPException:
         raise
     except RuntimeError as e:
+        logger.exception(f"RuntimeError ao processar comparação: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao processar comparação: {str(e)}"
         )
     except Exception as e:
+        logger.exception(f"Exception ao processar comparação: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Erro inesperado: {str(e)}"
