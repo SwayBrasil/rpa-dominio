@@ -3,6 +3,9 @@ Comparador de Extratos - TXT Otimiza x MPDS
 API principal FastAPI
 """
 
+import logging
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
@@ -10,29 +13,19 @@ from app.db import init_db
 from app.api.routes_comparacao import router as comparacoes_router
 from app.api.routes_plano_contas import router as plano_contas_router
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
     title="Comparador de Extratos",
     description="Ferramenta para comparar TXT Otimiza com MPDS (extrato estruturado)",
-    version="1.0.0"
+    version="1.0.0",
+    redirect_slashes=False  # Evita redirect 307 de /comparacoes para /comparacoes/
 )
 
-# CORS
-# Configuração de origens permitidas via variável de ambiente (separado por vírgula)
-# Exemplo: CORS_ORIGINS="http://localhost:5173,http://localhost:3000,https://rpa-dominio.onrender.com"
-import logging
-import os
-
-logger = logging.getLogger(__name__)
-
-# Lê variável de ambiente diretamente como fallback
+# CORS - DEVE estar antes de include_router
 cors_origins_str = os.getenv("CORS_ORIGINS") or settings.cors_origins
 cors_origins = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
-
-# Log para debug (remover depois)
-logger.warning(f"CORS_ORIGINS from env: {os.getenv('CORS_ORIGINS')}")
-logger.warning(f"CORS_ORIGINS from settings: {settings.cors_origins}")
-logger.warning(f"CORS_ORIGINS final: {cors_origins_str}")
-logger.warning(f"CORS origins list: {cors_origins}")
+print(f"CORS origins list: {cors_origins}")
 
 app.add_middleware(
     CORSMiddleware,
