@@ -289,17 +289,17 @@ def _parse_nubank(pdf_path: Path) -> Tuple[List[Lancamento], List[str]]:
                         matches2 = padrao2.findall(texto)
                         
                         for match in matches2:
-                            data_str, desc, valor_str = match
-                            data = _parse_data(data_str)
-                            if not data:
-                                continue
-                            valor = _parse_valor(valor_str)
-                            if valor == 0.0:
-                                continue
-                            
-                            lancamento = Lancamento(
-                                data=data,
-                                descricao=_normalizar_descricao(desc),
+                        data_str, desc, valor_str = match
+                        data = _parse_data(data_str)
+                        if not data:
+                            continue
+                        valor = _parse_valor(valor_str)
+                        if valor == 0.0:
+                            continue
+                        
+                        lancamento = Lancamento(
+                            data=data,
+                            descricao=_normalizar_descricao(desc),
                                 documento=None,
                                 valor=valor,
                                 saldo=None,
@@ -750,20 +750,11 @@ def _parse_sicoob(pdf_path: Path) -> Tuple[List[Lancamento], List[str]]:
                 logger.warning("SICOOB DEBUG: PDF vazio ou sem texto extraível")
                 return lancamentos, issues
             
-            # DEBUG: Loga primeiras 120 linhas
+            # DEBUG simplificado (apenas contagem)
             linhas_debug = texto_completo.splitlines()
-            logger.info("SICOOB DEBUG: primeiras 120 linhas:")
-            for i, l in enumerate(linhas_debug[:120], 1):
-                logger.info(f"  {i:03d}: {l}")
-            
-            # DEBUG: Conta linhas com DD/MM
             re_ddmm_debug = re.compile(r"^\s*\d{2}/\d{2}\b")
             cands = [l for l in linhas_debug if re_ddmm_debug.match(l)]
-            logger.info(f"SICOOB DEBUG: linhas com DD/MM encontradas: {len(cands)}")
-            if cands:
-                logger.info("SICOOB DEBUG: primeiras 20 DD/MM:")
-                for i, l in enumerate(cands[:20], 1):
-                    logger.info(f"  {i:02d}: {l}")
+            logger.info(f"SICOOB: {len(linhas_debug)} linhas, {len(cands)} com DD/MM")
             
             # Infere ano do período
             year_hint = _infer_year_from_period(texto_completo)
@@ -772,17 +763,7 @@ def _parse_sicoob(pdf_path: Path) -> Tuple[List[Lancamento], List[str]]:
                 year_hint = datetime.now().year
                 issues.append("Não foi possível inferir ano do período, usando ano atual")
             
-            # DEBUG: Loga ano inferido e exemplo de match
-            logger.info(f"SICOOB DEBUG: ano_inferido={year_hint}")
-            if cands:
-                exemplo_linha = cands[0]
-                match_exemplo = RE_DDMM.match(exemplo_linha)
-                if match_exemplo:
-                    dd_ex = match_exemplo.group("dd")
-                    mm_ex = match_exemplo.group("mm")
-                    logger.info(f"SICOOB DEBUG: exemplo data_str={dd_ex}/{mm_ex}/{year_hint}")
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(f"SICOOB DEBUG: regex usado: {RE_DDMM.pattern}, linha casada: '{exemplo_linha[:50]}'")
+            logger.info(f"SICOOB: ano inferido={year_hint}")
             
             # Divide em linhas (mantém todas, inclusive vazias, para preservar índices)
             linhas = texto_completo.splitlines()
@@ -807,7 +788,7 @@ def _parse_sicoob(pdf_path: Path) -> Tuple[List[Lancamento], List[str]]:
                 linha_upper = linha.upper()
                 if any(w in linha_upper for w in STOPWORDS):
                     i += 1
-                    continue
+                        continue
                     
                 # 1) Detecta início de lançamento (DD/MM)
                 if is_candidate_start(linha):
