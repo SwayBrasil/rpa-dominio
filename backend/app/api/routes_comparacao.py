@@ -59,8 +59,7 @@ def processar_comparacao_background(
     try:
         # Cria sessão própria (background task não tem acesso à sessão do request)
         db = SessionLocal()
-    
-    try:
+        
         logger.info(f"[BG] Iniciando processamento da comparação {comparacao_id}")
         
         # Atualiza started_at
