@@ -122,17 +122,21 @@ def _migrate_add_new_columns():
                 except Exception as e:
                     logger.warning(f"Erro ao adicionar parsing_issues (pode já existir): {e}")
             
-            # Adiciona started_at se não existir
+            # Adiciona started_at se não existir (TIMESTAMP para PostgreSQL, DATETIME para SQLite)
             if 'started_at' not in columns:
                 try:
-                    conn.execute(text("ALTER TABLE comparacoes ADD COLUMN started_at DATETIME"))
+                    is_sqlite = "sqlite" in settings.database_url.lower()
+                    col_type = "DATETIME" if is_sqlite else "TIMESTAMP"
+                    conn.execute(text(f"ALTER TABLE comparacoes ADD COLUMN started_at {col_type}"))
                 except Exception as e:
                     logger.warning(f"Erro ao adicionar started_at (pode já existir): {e}")
             
             # Adiciona finished_at se não existir
             if 'finished_at' not in columns:
                 try:
-                    conn.execute(text("ALTER TABLE comparacoes ADD COLUMN finished_at DATETIME"))
+                    is_sqlite = "sqlite" in settings.database_url.lower()
+                    col_type = "DATETIME" if is_sqlite else "TIMESTAMP"
+                    conn.execute(text(f"ALTER TABLE comparacoes ADD COLUMN finished_at {col_type}"))
                 except Exception as e:
                     logger.warning(f"Erro ao adicionar finished_at (pode já existir): {e}")
             
