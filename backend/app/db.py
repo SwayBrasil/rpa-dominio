@@ -79,134 +79,111 @@ def init_db():
 def _migrate_add_new_columns():
     """
     Migração automática: adiciona novas colunas se não existirem.
-    Compatível com bancos de dados existentes.
+    Compatível com PostgreSQL e SQLite.
+    
+    IMPORTANTE: Cada ALTER é executado em transação separada para evitar
+    que um erro aborte toda a transação (problema comum no PostgreSQL).
     """
     from sqlalchemy import inspect, text
+    
+    is_postgres = "postgresql" in settings.database_url.lower() or "postgres" in settings.database_url.lower()
+    is_sqlite = "sqlite" in settings.database_url.lower()
+    
+    logger.info(f"Iniciando migração de schema (postgres={is_postgres}, sqlite={is_sqlite})")
     
     try:
         inspector = inspect(engine)
         table_names = inspector.get_table_names()
         
         if 'comparacoes' not in table_names:
-            return  # Tabela não existe ainda, será criada pelo create_all
+            logger.info("Tabela 'comparacoes' não existe ainda, será criada pelo create_all")
+            return
         
-        columns = {col['name']: col for col in inspector.get_columns('comparacoes')}
+        # Obtém colunas existentes
+        existing_columns = {col['name'] for col in inspector.get_columns('comparacoes')}
+        logger.info(f"Colunas existentes: {existing_columns}")
         
-        with engine.begin() as conn:  # begin() faz commit automático
-            # Adiciona source_type se não existir
-            if 'source_type' not in columns:
-                try:
-                    conn.execute(text("ALTER TABLE comparacoes ADD COLUMN source_type VARCHAR(50) DEFAULT 'DOMINIO'"))
-                except Exception as e:
-                    # Coluna pode já existir em alguns casos
-                    logger.warning(f"Erro ao adicionar source_type (pode já existir): {e}")
-            
-            # Adiciona bank_source_type se não existir
-            if 'bank_source_type' not in columns:
-                try:
-                    conn.execute(text("ALTER TABLE comparacoes ADD COLUMN bank_source_type VARCHAR(50) DEFAULT 'PDF'"))
-                except Exception as e:
-                    logger.warning(f"Erro ao adicionar bank_source_type (pode já existir): {e}")
-            
-            # Adiciona input_files se não existir
-            if 'input_files' not in columns:
-                try:
-                    conn.execute(text("ALTER TABLE comparacoes ADD COLUMN input_files TEXT"))
-                except Exception as e:
-                    logger.warning(f"Erro ao adicionar input_files (pode já existir): {e}")
-            
-            # Adiciona parsing_issues se não existir
-            if 'parsing_issues' not in columns:
-                try:
-                    conn.execute(text("ALTER TABLE comparacoes ADD COLUMN parsing_issues TEXT"))
-                except Exception as e:
-                    logger.warning(f"Erro ao adicionar parsing_issues (pode já existir): {e}")
-            
-            # Adiciona started_at se não existir (TIMESTAMP para PostgreSQL, DATETIME para SQLite)
-            if 'started_at' not in columns:
-                try:
-                    is_sqlite = "sqlite" in settings.database_url.lower()
-                    col_type = "DATETIME" if is_sqlite else "TIMESTAMP"
-                    conn.execute(text(f"ALTER TABLE comparacoes ADD COLUMN started_at {col_type}"))
-                except Exception as e:
-                    logger.warning(f"Erro ao adicionar started_at (pode já existir): {e}")
-            
-            # Adiciona finished_at se não existir
-            if 'finished_at' not in columns:
-                try:
-                    is_sqlite = "sqlite" in settings.database_url.lower()
-                    col_type = "DATETIME" if is_sqlite else "TIMESTAMP"
-                    conn.execute(text(f"ALTER TABLE comparacoes ADD COLUMN finished_at {col_type}"))
-                except Exception as e:
-                    logger.warning(f"Erro ao adicionar finished_at (pode já existir): {e}")
-            
-            # Migração: torna caminho_extrato e caminho_razao nullable
-            # SQLite não permite MODIFY COLUMN, então precisamos recriar a tabela
-            # PostgreSQL permite MODIFY, mas mantemos compatibilidade com SQLite
-            if 'caminho_extrato' in columns and not columns['caminho_extrato']['nullable']:
-                logger.info("Migrando: tornando caminho_extrato e caminho_razao nullable...")
-                try:
-                    # Verifica se é SQLite ou PostgreSQL
-                    is_sqlite = "sqlite" in settings.database_url.lower()
-                    
-                    if is_sqlite:
-                        # SQLite não permite MODIFY, então recriamos a tabela
-                        conn.execute(text("PRAGMA foreign_keys=OFF"))
-                        
-                        # Cria tabela temporária com schema atualizado
-                        conn.execute(text("""
-                            CREATE TABLE comparacoes_new (
-                                id INTEGER NOT NULL PRIMARY KEY,
-                                criado_em DATETIME NOT NULL,
-                                periodo_inicio DATE NOT NULL,
-                                periodo_fim DATE NOT NULL,
-                                source_type VARCHAR(50) DEFAULT 'OTIMIZA_TXT',
-                                bank_source_type VARCHAR(50) DEFAULT 'CSV',
-                                input_files TEXT,
-                                status VARCHAR(50) DEFAULT 'pendente',
-                                erro TEXT,
-                                qtd_lancamentos_extrato INTEGER,
-                                qtd_lancamentos_razao INTEGER,
-                                qtd_divergencias INTEGER,
-                                parsing_issues TEXT
-                            )
-                        """))
-                        
-                        # Copia dados (ignora colunas antigas que não existem mais)
-                        conn.execute(text("""
-                            INSERT INTO comparacoes_new 
-                            (id, criado_em, periodo_inicio, periodo_fim, source_type, bank_source_type, 
-                             input_files, status, erro, qtd_lancamentos_extrato, qtd_lancamentos_razao, 
-                             qtd_divergencias, parsing_issues)
-                            SELECT 
-                                id, criado_em, periodo_inicio, periodo_fim,
-                                COALESCE(source_type, 'OTIMIZA_TXT') as source_type,
-                                COALESCE(bank_source_type, 'CSV') as bank_source_type,
-                                input_files, status, erro, qtd_lancamentos_extrato, 
-                                qtd_lancamentos_razao, qtd_divergencias, parsing_issues
-                            FROM comparacoes
-                        """))
-                        
-                        # Remove tabela antiga e renomeia nova
-                        conn.execute(text("DROP TABLE comparacoes"))
-                        conn.execute(text("ALTER TABLE comparacoes_new RENAME TO comparacoes"))
-                        conn.execute(text("PRAGMA foreign_keys=ON"))
-                    else:
-                        # PostgreSQL: pode usar ALTER TABLE diretamente
-                        conn.execute(text("ALTER TABLE comparacoes DROP COLUMN IF EXISTS caminho_extrato"))
-                        conn.execute(text("ALTER TABLE comparacoes DROP COLUMN IF EXISTS caminho_razao"))
-                    
-                    logger.info("Migração concluída: caminho_extrato e caminho_razao removidos")
-                except Exception as e:
-                    logger.error(f"Erro na migração de schema (pode precisar recriar banco): {e}")
-                    if "sqlite" in settings.database_url.lower():
-                        try:
-                            conn.execute(text("PRAGMA foreign_keys=ON"))
-                        except Exception:
-                            pass  # Ignora se não conseguir executar
-            
+        # Define colunas a adicionar com tipos específicos por banco
+        columns_to_add = []
+        
+        if 'source_type' not in existing_columns:
+            columns_to_add.append(('source_type', "VARCHAR(50) DEFAULT 'OTIMIZA_TXT'"))
+        
+        if 'bank_source_type' not in existing_columns:
+            columns_to_add.append(('bank_source_type', "VARCHAR(50) DEFAULT 'PDF'"))
+        
+        if 'input_files' not in existing_columns:
+            col_type = "JSONB" if is_postgres else "TEXT"
+            columns_to_add.append(('input_files', col_type))
+        
+        if 'parsing_issues' not in existing_columns:
+            col_type = "JSONB" if is_postgres else "TEXT"
+            columns_to_add.append(('parsing_issues', col_type))
+        
+        if 'started_at' not in existing_columns:
+            col_type = "TIMESTAMPTZ" if is_postgres else "DATETIME"
+            columns_to_add.append(('started_at', col_type))
+        
+        if 'finished_at' not in existing_columns:
+            col_type = "TIMESTAMPTZ" if is_postgres else "DATETIME"
+            columns_to_add.append(('finished_at', col_type))
+        
+        if 'status' not in existing_columns:
+            columns_to_add.append(('status', "VARCHAR(50) DEFAULT 'pendente'"))
+        
+        if 'erro' not in existing_columns:
+            columns_to_add.append(('erro', "TEXT"))
+        
+        # Executa cada ALTER em transação separada
+        for col_name, col_type in columns_to_add:
+            _add_column_safe(col_name, col_type, is_postgres)
+        
+        # Remove colunas antigas se existirem (PostgreSQL)
+        if is_postgres:
+            for old_col in ['caminho_extrato', 'caminho_razao']:
+                if old_col in existing_columns:
+                    _drop_column_safe(old_col)
+        
+        logger.info("Migração de schema concluída")
+        
     except Exception as e:
-        logger.warning(f"Erro na migração automática (pode ser ignorado): {e}")
+        logger.error(f"Erro na migração automática: {e}", exc_info=True)
+
+
+def _add_column_safe(col_name: str, col_type: str, is_postgres: bool):
+    """
+    Adiciona coluna de forma segura, em transação isolada.
+    Para PostgreSQL usa IF NOT EXISTS.
+    """
+    try:
+        with engine.connect() as conn:
+            if is_postgres:
+                # PostgreSQL: usa ADD COLUMN IF NOT EXISTS
+                sql = f"ALTER TABLE comparacoes ADD COLUMN IF NOT EXISTS {col_name} {col_type}"
+            else:
+                # SQLite: precisa verificar antes (não tem IF NOT EXISTS para ADD COLUMN)
+                sql = f"ALTER TABLE comparacoes ADD COLUMN {col_name} {col_type}"
+            
+            conn.execute(text(sql))
+            conn.commit()
+            logger.info(f"Schema: coluna '{col_name}' OK")
+    except Exception as e:
+        # Ignora erro se coluna já existe (SQLite)
+        if "duplicate column" in str(e).lower() or "already exists" in str(e).lower():
+            logger.info(f"Schema: coluna '{col_name}' já existe")
+        else:
+            logger.warning(f"Schema: erro ao adicionar '{col_name}': {e}")
+
+
+def _drop_column_safe(col_name: str):
+    """Remove coluna de forma segura (PostgreSQL only)."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(f"ALTER TABLE comparacoes DROP COLUMN IF EXISTS {col_name}"))
+            conn.commit()
+            logger.info(f"Schema: coluna '{col_name}' removida")
+    except Exception as e:
+        logger.warning(f"Schema: erro ao remover '{col_name}': {e}")
 
 
 def get_db() -> Session:

@@ -345,7 +345,11 @@ async def criar_comparacao(
     except Exception as e:
         shutil.rmtree(temp_dir, ignore_errors=True)
         logger.exception(f"Erro ao criar comparação: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao criar comparação: {str(e)}")
+        # Retorna erro com detalhes para o frontend (evita "CORS blocked" por falta de body)
+        error_msg = str(e)
+        if "column" in error_msg.lower() and "does not exist" in error_msg.lower():
+            error_msg = "Erro de banco de dados: schema desatualizado. Reinicie o backend."
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @router.get("/", response_model=List[ComparacaoResumo])
