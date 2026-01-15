@@ -788,7 +788,7 @@ def _parse_sicoob(pdf_path: Path) -> Tuple[List[Lancamento], List[str]]:
                 linha_upper = linha.upper()
                 if any(w in linha_upper for w in STOPWORDS):
                     i += 1
-                        continue
+                    continue
                     
                 # 1) Detecta início de lançamento (DD/MM)
                 if is_candidate_start(linha):
