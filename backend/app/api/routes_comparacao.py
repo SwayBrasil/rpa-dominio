@@ -47,12 +47,18 @@ def processar_comparacao_background(
     """
     Worker que processa a comparação em background.
     Atualiza o status no banco conforme progride.
+    
+    IMPORTANTE: Este worker NUNCA deve crashar o processo principal.
+    Todos os erros são capturados e salvos no banco.
     """
     import time
+    import traceback
     start_time = time.time()
+    db = None
     
-    # Cria sessão própria (background task não tem acesso à sessão do request)
-    db = SessionLocal()
+    try:
+        # Cria sessão própria (background task não tem acesso à sessão do request)
+        db = SessionLocal()
     
     try:
         logger.info(f"[BG] Iniciando processamento da comparação {comparacao_id}")
@@ -120,13 +126,18 @@ def processar_comparacao_background(
             elif bank_source_type == 'OFX':
                 lanc_mpds, issues_mpds = parse_mpds_ofx(Path(mpds_path), strict=False)
             elif bank_source_type == 'PDF':
+                logger.info(f"[BG] Iniciando parse_mpds_pdf para {mpds_path}")
                 lanc_mpds, issues_mpds = parse_mpds_pdf(Path(mpds_path), strict=False)
+                logger.info(f"[BG] parse_mpds_pdf retornou {len(lanc_mpds)} lançamentos")
             else:
                 raise ValueError(f"Formato não suportado: {bank_source_type}")
             
-            logger.info(f"[BG] Parsing extrato concluído em {time.time()-pdf_start:.2f}s: {len(lanc_mpds)} movimentações")
+            elapsed = time.time() - pdf_start
+            logger.info(f"[BG] Parsing extrato concluído em {elapsed:.2f}s: {len(lanc_mpds)} movimentações")
         except Exception as e:
-            logger.exception(f"[BG] Erro no parsing do extrato: {e}")
+            elapsed = time.time() - pdf_start
+            logger.error(f"[BG] Erro no parsing do extrato após {elapsed:.2f}s: {e}")
+            logger.error(f"[BG] Traceback parsing: {traceback.format_exc()}")
             raise RuntimeError(f"Falha no parsing do extrato: {str(e)}")
         
         comparacao.qtd_lancamentos_extrato = len(lanc_mpds)
@@ -198,20 +209,29 @@ def processar_comparacao_background(
         logger.info(f"[BG] Comparação {comparacao_id} concluída com sucesso em {total_time:.2f}s")
         
     except Exception as e:
-        logger.exception(f"[BG] Erro fatal na comparação {comparacao_id}: {e}")
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        logger.error(f"[BG] Erro fatal na comparação {comparacao_id}: {error_msg}")
+        logger.error(f"[BG] Traceback: {traceback.format_exc()}")
         
         try:
-            comparacao = db.query(Comparacao).filter(Comparacao.id == comparacao_id).first()
-            if comparacao:
-                comparacao.status = "erro"
-                comparacao.erro = str(e)[:500]  # Limita tamanho
-                comparacao.finished_at = datetime.utcnow()
-                db.commit()
+            if db:
+                comparacao = db.query(Comparacao).filter(Comparacao.id == comparacao_id).first()
+                if comparacao:
+                    comparacao.status = "erro"
+                    comparacao.erro = error_msg[:500]  # Limita tamanho
+                    comparacao.finished_at = datetime.utcnow()
+                    db.commit()
+                    logger.info(f"[BG] Status de erro salvo para comparação {comparacao_id}")
         except Exception as db_error:
             logger.error(f"[BG] Erro ao salvar status de erro: {db_error}")
     
     finally:
-        db.close()
+        # Fecha sessão do banco
+        if db:
+            try:
+                db.close()
+            except Exception:
+                pass
         
         # Limpa arquivos temporários
         try:
