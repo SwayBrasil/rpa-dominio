@@ -22,9 +22,7 @@ export async function criarComparacao(params: {
   
   form.append("mpds_pdf", params.mpds_pdf);
 
-  const { data } = await api.post<ComparacaoResumo>("/comparacoes/", form, {
-    headers: { "Content-Type": "multipart/form-data" },
-  });
+  const { data } = await api.post<ComparacaoResumo>("/comparacoes/", form);
 
   return data;
 }
