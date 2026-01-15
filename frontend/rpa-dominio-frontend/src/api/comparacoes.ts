@@ -22,7 +22,7 @@ export async function criarComparacao(params: {
   
   form.append("mpds_pdf", params.mpds_pdf);
 
-  const { data } = await api.post<ComparacaoResumo>("/comparacoes", form, {
+  const { data } = await api.post<ComparacaoResumo>("/comparacoes/", form, {
     headers: { "Content-Type": "multipart/form-data" },
   });
 
@@ -30,7 +30,7 @@ export async function criarComparacao(params: {
 }
 
 export async function listarComparacoes(): Promise<ComparacaoResumo[]> {
-  const { data } = await api.get<ComparacaoResumo[]>("/comparacoes");
+  const { data } = await api.get<ComparacaoResumo[]>("/comparacoes/");
   return data;
 }
 
