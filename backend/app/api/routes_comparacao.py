@@ -120,13 +120,26 @@ def processar_comparacao_background(
         issues_mpds = []
         
         try:
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+            
+            PDF_TIMEOUT_SECONDS = 30  # Timeout para parsing de PDF
+            
             if bank_source_type == 'CSV':
                 lanc_mpds, issues_mpds = parse_mpds_csv(Path(mpds_path), strict=False)
             elif bank_source_type == 'OFX':
                 lanc_mpds, issues_mpds = parse_mpds_ofx(Path(mpds_path), strict=False)
             elif bank_source_type == 'PDF':
-                logger.info(f"[BG] Iniciando parse_mpds_pdf para {mpds_path}")
-                lanc_mpds, issues_mpds = parse_mpds_pdf(Path(mpds_path), strict=False)
+                logger.info(f"[BG] Iniciando parse_mpds_pdf para {mpds_path} (timeout={PDF_TIMEOUT_SECONDS}s)")
+                
+                # Executa com timeout para evitar travamento
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(parse_mpds_pdf, Path(mpds_path), False)
+                    try:
+                        lanc_mpds, issues_mpds = future.result(timeout=PDF_TIMEOUT_SECONDS)
+                    except FuturesTimeoutError:
+                        logger.error(f"[BG] TIMEOUT: parsing PDF demorou mais de {PDF_TIMEOUT_SECONDS}s")
+                        raise RuntimeError(f"Timeout: parsing do PDF demorou mais de {PDF_TIMEOUT_SECONDS} segundos")
+                
                 logger.info(f"[BG] parse_mpds_pdf retornou {len(lanc_mpds)} lançamentos")
             else:
                 raise ValueError(f"Formato não suportado: {bank_source_type}")
